@@ -1,37 +1,72 @@
 const express = require('express');
-const mysql = require('mysql2');
+const fs = require('fs');
+const csv = require('csv-parser');
+const mysql = require('mysql2/promise');
+
 const app = express();
 
 const port = 3000;
 
-const pool = mysql.createPool({
+// Database connection configuration
+const dbConfig = {
     connectionLimit: 10,
     host: 'localhost',
     user: 'root',
     password: 'root',
-    database: 'bussinessquant'
+    database: 'nani'
+};
+
+// Create a MySQL connection pool
+const pool = mysql.createPool(dbConfig);
+
+
+const csvFilePath = './usersdata.csv';
+
+fs.createReadStream(csvFilePath)
+  .pipe(csv())
+  .on('data', async (row) => {
+    try {
+        const connection = await pool.getConnection();
+        const headers = Object.keys(row);
+        // Generate SQL schema based on the headers
+        const columns = headers.map(header => `\`${header}\` VARCHAR(255)`).join(', ');
+        const createTableQuery = `CREATE TABLE IF NOT EXISTS Nani (${columns})`;
+
+        // Execute the create table query
+        await connection.query(createTableQuery);
+        connection.release();
+
+        const insertQuery = `
+                        INSERT INTO Nani (${headers.map(header => `\`${header}\``).join(', ')}) 
+                        VALUES (${headers.map(() => '?').join(', ')})`;
+
+                    const values = headers.map(header => row[header]);
+
+                    const insertConnection = await pool.getConnection();
+                    await insertConnection.query(insertQuery, values);
+                    insertConnection.release();
+    } catch (error) {
+      console.error('Error processing data:', error);
+    }
+  })
+  .on('end', () => {
+    console.log('CSV file successfully processed');
 });
 
-app.get('/', (req, res) => {
-    pool.getConnection((err, connection) => {
-        if (err) {
-            console.error("Error while connecting to database:", err);
-            res.status(500).send("Internal Server Error");
-            return;
-        }
+app.get('/', async (req, res) => {
+    try {
+        const connection = await pool.getConnection();
 
-        connection.query("SELECT * FROM bussinessquant LIMIT 20", (err, result) => {
-            connection.release(); // Release the connection back to the pool
+        const sql = 'SELECT * FROM Nani';
 
-            if (err) {
-                console.error("Error while fetching data:", err);
-                res.status(500).send("Internal Server Error");
-                return;
-            }
+        const [rows, fields] = await connection.query(sql);
+        connection.release();
 
-            res.json(result);
-        });
-    });
+        res.json(rows);
+    } catch (error) {
+        console.error('Error retrieving products:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
 });
 
 app.listen(port, () => {
